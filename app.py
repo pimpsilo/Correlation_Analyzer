@@ -23,6 +23,9 @@ with st.sidebar:
     
     load_btn = st.button("Load Symphonies", type="primary")
 
+    st.divider()
+    st.caption("⚖️ **Disclaimer**: For research and educational purposes only. Not financial or investment advice. Backtested results do not guarantee future returns.")
+
 if 'symphony_data' not in st.session_state:
     st.session_state.symphony_data = None
 
@@ -236,3 +239,8 @@ if st.session_state.symphony_data:
             file_name="candidate_correlation_matrix.csv",
             mime="text/csv"
         )
+
+# --- 6. FOOTER DISCLAIMER ---
+st.divider()
+st.caption("⚖️ **Disclaimer**: This tool is provided solely for informational, research, and educational purposes. Nothing herein constitutes financial, investment, legal, or tax advice. Past or backtested performance is no guarantee of future returns.")
+
