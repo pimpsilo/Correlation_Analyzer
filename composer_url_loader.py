@@ -955,11 +955,12 @@ def main():
     print("1. Equal weight (1/N for each symphony)")
     print("2. Risk parity (inverse volatility)")
     print("3. Sharpe ratio weighted")
-    print("4. Custom weights")
+    print("4. Sortino ratio weighted")
+    print("5. Custom weights")
     
-    weight_choice = input("\nEnter choice (1-4, default: 1): ") or "1"
+    weight_choice = input("\nEnter choice (1-5, default: 1): ") or "1"
     
-    weight_methods = {'1': 'equal', '2': 'risk_parity', '3': 'max_sharpe', '4': 'custom'}
+    weight_methods = {'1': 'equal', '2': 'risk_parity', '3': 'max_sharpe', '4': 'max_sortino', '5': 'custom'}
     method = weight_methods.get(weight_choice, 'equal')
     
     if method == 'custom':

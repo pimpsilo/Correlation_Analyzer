@@ -1,6 +1,6 @@
 # 🎼 Symphony Correlation Analyzer & Clustering Engine
 
-A Streamlit web application for analyzing, clustering, and selecting Composer.trade trading symphonies via hierarchical correlation trees (dendrograms) and performance metrics (Sharpe, Calmar, Max Drawdown).
+A Streamlit web application for analyzing, clustering, and selecting Composer.trade trading symphonies via hierarchical correlation trees (dendrograms) and performance metrics (Sharpe, Sortino, Calmar, Max Drawdown).
 
 ---
 
@@ -17,6 +17,7 @@ A Streamlit web application for analyzing, clustering, and selecting Composer.tr
 3. **Multi-Objective Candidate Selection**:
    - Filter and pick cluster representatives by:
      - **Highest Sharpe Ratio**
+     - **Highest Sortino Ratio**
      - **Highest Calmar Ratio**
      - **Highest Annual Return**
      - **Lowest Maximum Drawdown**

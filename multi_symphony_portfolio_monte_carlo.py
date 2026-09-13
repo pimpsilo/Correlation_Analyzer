@@ -147,6 +147,10 @@ class PortfolioMonteCarloSimulator:
             std_return = np.std(returns, ddof=1)
             sharpe = (mean_return * 252) / (std_return * np.sqrt(252)) if std_return > 0 else 0
             
+            downside_r = np.minimum(returns, 0)
+            downside_vol = np.sqrt(np.mean(downside_r ** 2)) * np.sqrt(252)
+            sortino = (mean_return * 252) / downside_vol if downside_vol > 0 else 0
+            
             # Drawdown analysis
             cumulative = (1 + returns).cumprod()
             running_max = np.maximum.accumulate(cumulative)
@@ -159,6 +163,7 @@ class PortfolioMonteCarloSimulator:
                 'mean_annual': mean_return * 252,
                 'std_annual': std_return * np.sqrt(252),
                 'sharpe': sharpe,
+                'sortino': sortino,
                 'max_drawdown': max_drawdown,
                 'total_return': cumulative[-1] - 1
             }
@@ -170,12 +175,12 @@ class PortfolioMonteCarloSimulator:
         self._dual_print("\n" + "="*80)
         self._dual_print("SYMPHONY STATISTICS")
         self._dual_print("="*80)
-        self._dual_print(f"{'Symphony':<40} {'Annual %':<12} {'Volatility':<12} {'Sharpe':<8} {'Max DD':<8}")
-        self._dual_print("-"*80)
+        self._dual_print(f"{'Symphony':<40} {'Annual %':<10} {'Volatility':<11} {'Sharpe':<8} {'Sortino':<8} {'Max DD':<8}")
+        self._dual_print("-"*88)
         for name in self.symphony_names:
             s = self.stats[name]
-            self._dual_print(f"{name:<40} {s['mean_annual']*100:>10.2f}% {s['std_annual']*100:>10.2f}% "
-                  f"{s['sharpe']:>7.2f} {s['max_drawdown']*100:>7.1f}%")
+            self._dual_print(f"{name:<40} {s['mean_annual']*100:>9.2f}% {s['std_annual']*100:>10.2f}% "
+                  f"{s['sharpe']:>8.2f} {s['sortino']:>8.2f} {s['max_drawdown']*100:>7.1f}%")
         
         self._dual_print("\n" + "="*80)
         self._dual_print("CORRELATION MATRIX")
@@ -236,6 +241,15 @@ class PortfolioMonteCarloSimulator:
                 weights_array = np.ones(self.n_symphonies) / self.n_symphonies
             self.weights = {name: weights_array[i] for i, name in enumerate(self.symphony_names)}
         
+        elif method == 'max_sortino':
+            # Weight by Sortino ratio
+            sortinos = np.array([max(self.stats[name]['sortino'], 0) for name in self.symphony_names])
+            if sortinos.sum() > 0:
+                weights_array = sortinos / sortinos.sum()
+            else:
+                weights_array = np.ones(self.n_symphonies) / self.n_symphonies
+            self.weights = {name: weights_array[i] for i, name in enumerate(self.symphony_names)}
+        
         elif method == 'custom':
             # Validate weights
             if set(weights.keys()) != set(self.symphony_names):
@@ -262,6 +276,7 @@ class PortfolioMonteCarloSimulator:
         self._dual_print(f"\n Portfolio Expected Annual Return: {self.portfolio_expected_return*100:.2f}%")
         self._dual_print(f" Portfolio Annual Volatility: {self.portfolio_volatility*100:.2f}%")
         self._dual_print(f" Portfolio Sharpe Ratio: {self.portfolio_sharpe:.2f}")
+        self._dual_print(f" Portfolio Sortino Ratio: {self.portfolio_sortino:.2f}")
     
     def _calculate_portfolio_stats(self):
         """Calculate expected portfolio-level statistics."""
@@ -280,6 +295,12 @@ class PortfolioMonteCarloSimulator:
         
         self.portfolio_volatility = np.sqrt(portfolio_variance)
         self.portfolio_sharpe = self.portfolio_expected_return / self.portfolio_volatility if self.portfolio_volatility > 0 else 0
+        
+        # Portfolio Sortino
+        port_returns = self.returns_matrix @ self.weights_array
+        downside_port = np.minimum(port_returns, 0)
+        downside_port_vol = np.sqrt(np.mean(downside_port ** 2)) * np.sqrt(252)
+        self.portfolio_sortino = self.portfolio_expected_return / downside_port_vol if downside_port_vol > 0 else 0
     
     def set_current_holdings(self, holdings_by_symphony: Dict[str, Dict[str, float]]):
         """
@@ -854,7 +875,8 @@ class PortfolioMonteCarloSimulator:
             'portfolio': {
                 'expected_annual_return': float(self.portfolio_expected_return),
                 'annual_volatility': float(self.portfolio_volatility),
-                'sharpe_ratio': float(self.portfolio_sharpe)
+                'sharpe_ratio': float(self.portfolio_sharpe),
+                'sortino_ratio': float(self.portfolio_sortino)
             },
             'symphonies': {},
             'weights': self.weights,
@@ -870,6 +892,7 @@ class PortfolioMonteCarloSimulator:
                 'mean_annual': float(self.stats[name]['mean_annual']),
                 'std_annual': float(self.stats[name]['std_annual']),
                 'sharpe': float(self.stats[name]['sharpe']),
+                'sortino': float(self.stats[name]['sortino']),
                 'max_drawdown': float(self.stats[name]['max_drawdown'])
             }
         
@@ -989,11 +1012,12 @@ def main():
     dual_print("1. Equal weight")
     dual_print("2. Risk parity (inverse volatility)")
     dual_print("3. Sharpe ratio weighted")
-    dual_print("4. Custom weights")
+    dual_print("4. Sortino ratio weighted")
+    dual_print("5. Custom weights")
     
-    weight_choice = input("Enter choice (1-4, default: 1): ") or "1"
+    weight_choice = input("Enter choice (1-5, default: 1): ") or "1"
     
-    weight_methods = {'1': 'equal', '2': 'risk_parity', '3': 'max_sharpe', '4': 'custom'}
+    weight_methods = {'1': 'equal', '2': 'risk_parity', '3': 'max_sharpe', '4': 'max_sortino', '5': 'custom'}
     method = weight_methods.get(weight_choice, 'equal')
     
     if method == 'custom':
