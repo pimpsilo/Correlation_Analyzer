@@ -41,8 +41,16 @@ cd Correlation_Analyzer
 # Install dependencies
 pip install -r requirements.txt
 
-# Run Streamlit
-streamlit run app.py
+# Run with the runner script:
+./run.sh            # Launches Streamlit Web UI (app.py)
+./run.sh cli        # Launches interactive CLI analyzer (correlation_analyzer.py)
+./run.sh mc         # Launches Monte Carlo simulator
+
+# Or using the global terminal command:
+correlation-analyzer       # Streamlit Web UI
+correlation-analyzer cli   # CLI analyzer
+correlation-analyzer-ui    # Quick zsh function
+correlation-analyzer-cli   # Quick zsh function
 ```
 
 - **On Desktop**: Open `http://localhost:8501`

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.cluster.hierarchy as sch
 import scipy.spatial.distance as ssd
-from datetime import date
+from datetime import date, timedelta
 
 # Import backend engine functions
 from symphony_engine import parse_urls_from_text, load_symphonies
@@ -20,10 +20,31 @@ with st.sidebar:
     st.write("Batch load symphonies. The local cache prevents redundant API calls.")
     urls_text = st.text_area("Paste Composer URLs or IDs (one per line)", height=250)
     st.caption("💡 *Note: Composer watchlists paginate to 25 items per page. Copy across multiple pages to analyze larger lists.*")
-    start_date = st.date_input("Start date", value=date(2020, 1, 1))
-    end_date = st.date_input("End date", value=date.today())
+    EARLIEST_ALLOWED_DATE = date(1970, 1, 1)
+    TODAY = date.today()
+    start_date = st.date_input("Start date", value=date(2020, 1, 1), min_value=EARLIEST_ALLOWED_DATE, max_value=TODAY)
+    end_date = st.date_input("End date", value=TODAY, min_value=EARLIEST_ALLOWED_DATE, max_value=TODAY)
     
     load_btn = st.button("Load Symphonies", type="primary")
+
+    st.divider()
+    st.subheader("Data Filters")
+    filter_by_date = st.checkbox(
+        "Filter by earliest backtest date",
+        value=True,
+        help="Exclude symphonies whose backtest history begins after the cutoff date."
+    )
+    if filter_by_date:
+        cutoff_date = st.date_input(
+            "Must start on or before:",
+            value=min(start_date + timedelta(days=7), TODAY),
+            min_value=EARLIEST_ALLOWED_DATE,
+            max_value=TODAY,
+            help="Symphonies starting after this date will be excluded from the dendrogram and downstream analysis."
+        )
+    else:
+        cutoff_date = None
+    st.caption("💡 *Tip: Adjusting this filter updates the dendrogram instantly for loaded symphonies without re-fetching.*")
 
     st.divider()
     st.caption("⚖️ **Disclaimer**: For research and educational purposes only. Not financial or investment advice. Backtested results do not guarantee future returns.")
@@ -61,15 +82,61 @@ if load_btn and urls_text:
 
 # --- 2. EXECUTION & CLUSTERING ---
 if st.session_state.symphony_data:
-    symphony_names = list(st.session_state.symphony_data.keys())
-    n_symphonies = len(symphony_names)
-    
     st.header("2. Dendrogram & Cluster Groupings")
     
+    # Filter symphonies by earliest backtest date threshold
+    if filter_by_date and cutoff_date is not None:
+        cutoff_ts = pd.to_datetime(cutoff_date)
+        if cutoff_ts.tzinfo is not None:
+            cutoff_ts = cutoff_ts.tz_localize(None)
+        cutoff_ts = cutoff_ts.normalize()
+        
+        active_symphonies = {}
+        excluded_symphonies = {}
+        for name, df in st.session_state.symphony_data.items():
+            meta = df.attrs.get('metadata', {})
+            earliest_raw = meta.get('earliest_date', df.index.min())
+            earliest_dt = pd.to_datetime(earliest_raw)
+            if earliest_dt.tzinfo is not None:
+                earliest_dt = earliest_dt.tz_localize(None)
+            earliest_dt = earliest_dt.normalize()
+            
+            if earliest_dt <= cutoff_ts:
+                active_symphonies[name] = df
+            else:
+                excluded_symphonies[name] = {
+                    "id": meta.get("id", "N/A"),
+                    "earliest_date": earliest_dt.strftime("%Y-%m-%d")
+                }
+    else:
+        active_symphonies = st.session_state.symphony_data
+        excluded_symphonies = {}
+
+    if excluded_symphonies:
+        st.info(f"⏳ **Date Filter Active:** {len(active_symphonies)} of {len(st.session_state.symphony_data)} symphonies qualify (backtest starts on or before {cutoff_date.strftime('%Y-%m-%d')}). {len(excluded_symphonies)} excluded.")
+        with st.expander(f"View {len(excluded_symphonies)} Excluded Symphonies (Started after cutoff)"):
+            ex_df = pd.DataFrame([
+                {"Symphony": k, "Composer ID": v["id"], "Earliest Start Date": v["earliest_date"]}
+                for k, v in excluded_symphonies.items()
+            ])
+            st.dataframe(ex_df, hide_index=True, use_container_width=True)
+
+    if len(active_symphonies) < 2:
+        st.warning(
+            f"⚠️ Only {len(active_symphonies)} symphony qualified with history starting on or before "
+            f"{cutoff_date.strftime('%Y-%m-%d') if cutoff_date else 'N/A'}. "
+            f"A minimum of 2 symphonies are required to build a dendrogram. "
+            f"Please adjust or disable the earliest backtest date filter in the sidebar."
+        )
+        st.stop()
+
+    symphony_names = list(active_symphonies.keys())
+    n_symphonies = len(symphony_names)
+    
     # Align dates across all datasets
-    all_dates = st.session_state.symphony_data[symphony_names[0]].index.values
+    all_dates = active_symphonies[symphony_names[0]].index.values
     for name in symphony_names[1:]:
-        all_dates = np.intersect1d(all_dates, st.session_state.symphony_data[name].index.values)
+        all_dates = np.intersect1d(all_dates, active_symphonies[name].index.values)
         
     returns_matrix = np.zeros((len(all_dates), n_symphonies))
     
@@ -77,7 +144,7 @@ if st.session_state.symphony_data:
     metrics = []
     
     for i, name in enumerate(symphony_names):
-        df = st.session_state.symphony_data[name]
+        df = active_symphonies[name]
         meta = df.attrs['metadata']
         df_aligned = df[df.index.isin(all_dates)].sort_index()
         r = df_aligned['returns'].values
@@ -132,7 +199,10 @@ if st.session_state.symphony_data:
         # Assign cluster IDs based on the target number
         cluster_labels = sch.fcluster(linkage_matrix, target_clusters, criterion='maxclust')
         
-        st.metric("Total Algorithms Analyzed", n_symphonies)
+        st.metric("Total Algorithms Loaded", len(st.session_state.symphony_data))
+        st.metric("Active in Dendrogram", n_symphonies)
+        if excluded_symphonies:
+            st.metric("Excluded by Date Filter", len(excluded_symphonies))
         st.metric("Overlapping Trading Days", len(all_dates))
 
     with c1:
@@ -192,11 +262,13 @@ if st.session_state.symphony_data:
             
         st.write("**Automatically Selected Candidates:**")
         selected_df = analysis_df[analysis_df["Symphony"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
+        selected_table_height = min(int((len(selected_df) + 1) * 35.5) + 3, 800)
         st.dataframe(
             selected_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
                            .format({"Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            height=selected_table_height
         )
         st.download_button(
             label="Download Selected Candidates as CSV",
@@ -217,11 +289,13 @@ if st.session_state.symphony_data:
                 selected_symphonies.append(chosen)
 
         selected_df = analysis_df[analysis_df["Symphony"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
+        selected_table_height = min(int((len(selected_df) + 1) * 35.5) + 3, 800)
         st.dataframe(
             selected_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
                            .format({"Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            height=selected_table_height
         )
         st.download_button(
             label="Download Selected Candidates as CSV",
@@ -235,7 +309,7 @@ if st.session_state.symphony_data:
         
         cand_returns = np.zeros((len(all_dates), len(selected_symphonies)))
         for i, name in enumerate(selected_symphonies):
-            df = st.session_state.symphony_data[name]
+            df = active_symphonies[name]
             df_aligned = df[df.index.isin(all_dates)].sort_index()
             cand_returns[:, i] = df_aligned['returns'].values
             
