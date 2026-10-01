@@ -1,13 +1,14 @@
-# 🎼 Symphony Correlation Analyzer & Clustering Engine
+# 🎼 Symphony & Asset Correlation Analyzer & Clustering Engine
 
-A Streamlit web application for analyzing, clustering, and selecting Composer.trade trading symphonies via hierarchical correlation trees (dendrograms) and performance metrics (Sharpe, Sortino, Calmar, Max Drawdown).
+A Streamlit web application for analyzing, clustering, and selecting Composer.trade trading symphonies, individual stocks, ETFs, and mutual funds via hierarchical correlation trees (dendrograms) and performance metrics (Sharpe, Sortino, Calmar, Max Drawdown).
 
 ---
 
 ## 🚀 Key Features
 
-1. **Composer API & Cache Ingestion**:
-   - Paste Composer symphony URLs or IDs to fetch historical backtest allocations.
+1. **Multi-Asset Ingestion (Composer Symphonies, Stocks, ETFs, Mutual Funds)**:
+   - Paste Composer symphony URLs, symphony IDs, or raw ticker symbols (one per line).
+   - Direct support for **Stocks** (e.g. `GEV`, `GOOG`), **ETFs** (e.g. `QQQ`, `SPY`, `ZDIS`), and **Mutual Funds** (e.g. `SMPIX`, `FSELX`, `RMQHX`).
    - Built-in local cache in `data_storage/` prevents redundant API calls and rate-limiting.
 
 2. **Hierarchical Clustering**:

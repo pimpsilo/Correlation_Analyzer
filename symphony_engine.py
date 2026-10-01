@@ -13,14 +13,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STORAGE_DIR = os.path.join(BASE_DIR, "data_storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
+def normalize_ticker_symbol(symbol: str) -> str:
+    """Normalize ticker symbol for Yahoo Finance."""
+    sym = symbol.strip().upper().lstrip('$')
+    if not sym.startswith('^'):
+        sym = sym.replace('/', '-').replace('.', '-')
+    return sym
+
 def parse_urls_from_text(text: str) -> dict:
-    """Parse Composer symphony URLs or IDs from text, supporting newlines, commas, and spaces."""
-    symphony_urls = {}
+    """Parse Composer symphony URLs, symphony IDs, or ticker symbols from text,
+    supporting newlines, commas, spaces, and comments (#)."""
+    parsed_items = {}
     url_pattern = r'(?:https?://)?(?:app\.)?composer\.trade/symphony/([A-Za-z0-9_-]+)'
-    id_pattern = r'\b([A-Za-z0-9_-]{12,})\b'
     
     found_ids = set()
-    # Support lines with comments (#), comma separation, and whitespace separation
     clean_lines = []
     for line in text.split('\n'):
         line_clean = line.split('#')[0].strip()
@@ -33,22 +39,51 @@ def parse_urls_from_text(text: str) -> dict:
         if not token:
             continue
             
+        lower_token = token.lower()
+        # Explicit ticker prefixes (e.g. ticker:SPY, etf:QQQ, mf:FSELX)
+        if lower_token.startswith(('ticker:', 'stock:', 'etf:', 'mf:', 'fund:')):
+            raw_sym = token.split(':', 1)[1].strip()
+            sym = normalize_ticker_symbol(raw_sym)
+            if sym and sym not in found_ids:
+                found_ids.add(sym)
+                parsed_items[f"Ticker_{sym}"] = f"ticker:{sym}"
+            continue
+            
+        # Explicit symphony prefix (e.g. symphony:IxUYGLhjD2rF1Xi2GEmI)
+        if lower_token.startswith(('symphony:', 'sym:')):
+            sym_id = token.split(':', 1)[1].strip()
+            if sym_id and sym_id not in found_ids:
+                found_ids.add(sym_id)
+                parsed_items[f"Symphony_{len(parsed_items) + 1}"] = f"https://app.composer.trade/symphony/{sym_id}/details"
+            continue
+            
+        # Match Composer URLs
         url_match = re.search(url_pattern, token)
         if url_match:
             sym_id = url_match.group(1)
             if sym_id not in found_ids:
                 found_ids.add(sym_id)
-                symphony_urls[f"Symphony_{len(symphony_urls) + 1}"] = f"https://app.composer.trade/symphony/{sym_id}/details"
+                parsed_items[f"Symphony_{len(parsed_items) + 1}"] = f"https://app.composer.trade/symphony/{sym_id}/details"
             continue
             
-        id_match = re.search(id_pattern, token)
-        if id_match:
-            sym_id = id_match.group(1)
-            if sym_id not in found_ids and len(sym_id) >= 12:
+        # Match Composer ID (alphanumeric string with length >= 12)
+        if re.match(r'^[A-Za-z0-9_-]{12,}$', token):
+            sym_id = token
+            if sym_id not in found_ids:
                 found_ids.add(sym_id)
-                symphony_urls[f"Symphony_{len(symphony_urls) + 1}"] = f"https://app.composer.trade/symphony/{sym_id}/details"
+                parsed_items[f"Symphony_{len(parsed_items) + 1}"] = f"https://app.composer.trade/symphony/{sym_id}/details"
+            continue
+            
+        # Match ticker symbols (1-6 letters, optional classes like BRK-B or BRK.B, or indexes like ^GSPC)
+        clean_token = token.lstrip('$')
+        if re.match(r'^\^?[A-Za-z]{1,6}(?:[\.\-\/][A-Za-z]{1,2})?$', clean_token):
+            sym = normalize_ticker_symbol(clean_token)
+            if sym and sym not in found_ids:
+                found_ids.add(sym)
+                parsed_items[f"Ticker_{sym}"] = f"ticker:{sym}"
+            continue
                 
-    return symphony_urls
+    return parsed_items
 
 def convert_trading_date(date_int):
     """Convert integer trading date to datetime."""
@@ -174,7 +209,7 @@ def calculate_symphony_returns(allocations_df: pd.DataFrame, tickers: list):
     return pd.Series(daily_returns, index=dates), dates
 
 def load_symphonies(urls: dict, start_date: str, end_date: str):
-    """Load symphonies from cache or Composer API.
+    """Load symphonies or individual tickers from cache or APIs.
     
     Returns:
         tuple: (symphony_data: dict, failed_symphonies: dict)
@@ -184,15 +219,32 @@ def load_symphonies(urls: dict, start_date: str, end_date: str):
     req_start = pd.to_datetime(start_date)
     req_end = pd.to_datetime(end_date)
     
-    for name, url in urls.items():
-        sym_id = url.split('/')[-2] if url.endswith('/details') else url.split('/')[-1]
-        cache_csv = os.path.join(STORAGE_DIR, f"{sym_id}_returns.csv")
-        cache_meta = os.path.join(STORAGE_DIR, f"{sym_id}_meta.json")
-        
+    composer_items = {}
+    ticker_items = []
+    
+    for name, target in urls.items():
+        if target.startswith("ticker:"):
+            sym = target.split("ticker:")[1].upper()
+            if sym not in ticker_items:
+                ticker_items.append(sym)
+        elif target.startswith("http") or "composer.trade" in target or len(target) >= 12:
+            composer_items[name] = target
+        else:
+            norm = normalize_ticker_symbol(target)
+            if len(norm) <= 8 and not re.match(r'^[A-Za-z0-9_-]{12,}$', target):
+                if norm not in ticker_items:
+                    ticker_items.append(norm)
+            else:
+                composer_items[name] = target
+
+    # --- 1. PROCESS TICKERS (Stocks, ETFs, Mutual Funds) ---
+    uncached_tickers = []
+    
+    for ticker in ticker_items:
+        cache_csv = os.path.join(STORAGE_DIR, f"ticker_{ticker}_returns.csv")
+        cache_meta = os.path.join(STORAGE_DIR, f"ticker_{ticker}_meta.json")
         use_cache = False
-        cached_meta = None
         
-        # 1. Check local storage for existing data
         if os.path.exists(cache_csv) and os.path.exists(cache_meta):
             try:
                 with open(cache_meta, 'r') as f:
@@ -200,8 +252,158 @@ def load_symphonies(urls: dict, start_date: str, end_date: str):
                 cached_start = pd.to_datetime(cached_meta.get('earliest_date'))
                 cached_end = pd.to_datetime(cached_meta.get('latest_date'))
                 
-                # Use cache if it covers the requested range or has valid overlap
-                # (even if req_start is earlier than earliest possible backtest date)
+                if cached_start is not None and cached_end is not None:
+                    if req_end <= cached_end + pd.Timedelta(days=5) and req_start <= cached_end:
+                        df = pd.read_csv(cache_csv, index_col='date', parse_dates=True)
+                        actual_start = max(req_start, cached_start)
+                        actual_end = min(req_end, cached_end)
+                        df_sliced = df.loc[actual_start:actual_end]
+                        
+                        if len(df_sliced) >= 2:
+                            df_sliced.attrs['metadata'] = {
+                                'id': ticker,
+                                'earliest_date': df_sliced.index.min(),
+                                'latest_date': df_sliced.index.max(),
+                                'is_ticker': True
+                            }
+                            display_name = ticker
+                            suffix = 2
+                            while display_name in symphony_data:
+                                display_name = f"{ticker}_{suffix}"
+                                suffix += 1
+                            symphony_data[display_name] = df_sliced
+                            use_cache = True
+            except Exception:
+                use_cache = False
+                
+        if not use_cache:
+            uncached_tickers.append(ticker)
+
+    if uncached_tickers:
+        fetch_start = (req_start - pd.Timedelta(days=10)).strftime('%Y-%m-%d')
+        fetch_end = (req_end + pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+        
+        batch_prices = {}
+        try:
+            raw_prices = yf.download(
+                uncached_tickers,
+                start=fetch_start,
+                end=fetch_end,
+                auto_adjust=True,
+                progress=False
+            )
+            if not raw_prices.empty:
+                close_df = raw_prices['Close'] if 'Close' in raw_prices else raw_prices
+                if isinstance(close_df, pd.DataFrame):
+                    for t in uncached_tickers:
+                        if t in close_df.columns:
+                            s = close_df[t].dropna()
+                            if len(s) >= 2:
+                                batch_prices[t] = s
+                elif isinstance(close_df, pd.Series):
+                    s = close_df.dropna()
+                    if len(s) >= 2 and len(uncached_tickers) == 1:
+                        batch_prices[uncached_tickers[0]] = s
+        except Exception:
+            pass
+            
+        for ticker in uncached_tickers:
+            series = batch_prices.get(ticker)
+            if series is None or len(series) < 2:
+                try:
+                    t_obj = yf.Ticker(ticker)
+                    hist = t_obj.history(start=fetch_start, end=fetch_end, auto_adjust=True)
+                    if not hist.empty and 'Close' in hist:
+                        s = hist['Close'].dropna()
+                        if len(s) >= 2:
+                            series = s
+                except Exception:
+                    pass
+                    
+            if series is not None and len(series) >= 2:
+                series.index = pd.to_datetime(series.index).normalize()
+                if series.index.tz is not None:
+                    series.index = series.index.tz_localize(None)
+                returns = series.pct_change().dropna()
+                returns_sliced = returns.loc[req_start:req_end]
+                
+                if len(returns_sliced) >= 2:
+                    df = pd.DataFrame({'returns': returns_sliced})
+                    df.index.name = 'date'
+                    
+                    cache_csv = os.path.join(STORAGE_DIR, f"ticker_{ticker}_returns.csv")
+                    cache_meta = os.path.join(STORAGE_DIR, f"ticker_{ticker}_meta.json")
+                    try:
+                        df.to_csv(cache_csv)
+                        meta_data = {
+                            'symphony_name': ticker,
+                            'id': ticker,
+                            'is_ticker': True,
+                            'earliest_date': returns_sliced.index.min().strftime('%Y-%m-%d'),
+                            'latest_date': returns_sliced.index.max().strftime('%Y-%m-%d')
+                        }
+                        with open(cache_meta, 'w') as f:
+                            json.dump(meta_data, f)
+                    except Exception:
+                        pass
+                        
+                    df.attrs['metadata'] = {
+                        'id': ticker,
+                        'earliest_date': returns_sliced.index.min(),
+                        'latest_date': returns_sliced.index.max(),
+                        'is_ticker': True
+                    }
+                    display_name = ticker
+                    suffix = 2
+                    while display_name in symphony_data:
+                        display_name = f"{ticker}_{suffix}"
+                        suffix += 1
+                    symphony_data[display_name] = df
+                else:
+                    failed_symphonies[ticker] = f"Insufficient trading days for {ticker} within the selected date range."
+            else:
+                fallback_success = False
+                cache_csv = os.path.join(STORAGE_DIR, f"ticker_{ticker}_returns.csv")
+                cache_meta = os.path.join(STORAGE_DIR, f"ticker_{ticker}_meta.json")
+                if os.path.exists(cache_csv) and os.path.exists(cache_meta):
+                    try:
+                        df = pd.read_csv(cache_csv, index_col='date', parse_dates=True)
+                        if len(df) >= 2:
+                            df.attrs['metadata'] = {
+                                'id': ticker,
+                                'earliest_date': df.index.min(),
+                                'latest_date': df.index.max(),
+                                'is_ticker': True
+                            }
+                            display_name = ticker
+                            suffix = 2
+                            while display_name in symphony_data:
+                                display_name = f"{ticker}_{suffix}"
+                                suffix += 1
+                            symphony_data[display_name] = df
+                            fallback_success = True
+                    except Exception:
+                        pass
+                if not fallback_success:
+                    failed_symphonies[ticker] = f"No price data found on Yahoo Finance for ticker '{ticker}'."
+
+    # --- 2. PROCESS COMPOSER SYMPHONIES ---
+    for name, url in composer_items.items():
+        sym_id = url.split('/')[-2] if url.endswith('/details') else url.split('/')[-1]
+        cache_csv = os.path.join(STORAGE_DIR, f"{sym_id}_returns.csv")
+        cache_meta = os.path.join(STORAGE_DIR, f"{sym_id}_meta.json")
+        
+        use_cache = False
+        cached_meta = None
+        
+        # Check local storage for existing data
+        if os.path.exists(cache_csv) and os.path.exists(cache_meta):
+            try:
+                with open(cache_meta, 'r') as f:
+                    cached_meta = json.load(f)
+                cached_start = pd.to_datetime(cached_meta.get('earliest_date'))
+                cached_end = pd.to_datetime(cached_meta.get('latest_date'))
+                
                 if cached_start is not None and cached_end is not None:
                     if req_end <= cached_end + pd.Timedelta(days=5) and req_start <= cached_end:
                         df = pd.read_csv(cache_csv, index_col='date', parse_dates=True)
@@ -216,7 +418,6 @@ def load_symphonies(urls: dict, start_date: str, end_date: str):
                                 'earliest_date': df_sliced.index.min(),
                                 'latest_date': df_sliced.index.max()
                             }
-                            # Disambiguate duplicate names
                             display_name = actual_name
                             suffix = 2
                             while display_name in symphony_data:
@@ -228,7 +429,7 @@ def load_symphonies(urls: dict, start_date: str, end_date: str):
             except Exception:
                 use_cache = False
 
-        # 2. Fetch new data if cache is missing or needs live update
+        # Fetch new data if cache is missing or needs live update
         if not use_cache:
             try:
                 alloc_df, actual_name, tickers = fetch_composer_symphony(url, start_date, end_date)
@@ -240,7 +441,6 @@ def load_symphonies(urls: dict, start_date: str, end_date: str):
                 df = pd.DataFrame({'returns': returns}, index=dates)
                 df.index.name = 'date'
                 
-                # Save new data to storage
                 df.to_csv(cache_csv)
                 meta_data = {
                     'symphony_name': actual_name,
@@ -267,7 +467,6 @@ def load_symphonies(urls: dict, start_date: str, end_date: str):
                 time.sleep(0.3)  # Rate limit throttle between live queries
                 
             except Exception as e:
-                # 3. If live fetch failed, fallback to cached data if available
                 fallback_success = False
                 if cached_meta and os.path.exists(cache_csv):
                     try:

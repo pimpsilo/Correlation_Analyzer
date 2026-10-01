@@ -10,29 +10,29 @@ from datetime import date, timedelta
 # Import backend engine functions
 from symphony_engine import parse_urls_from_text, load_symphonies
 
-st.set_page_config(page_title="Composer Symphony Clustering", layout="wide")
+st.set_page_config(page_title="Symphony & Asset Correlation Clustering", layout="wide")
 st.set_option("client.toolbarMode", "viewer")
-st.title("Symphony Hierarchical Clustering & Selection")
+st.title("Symphony & Asset Hierarchical Clustering & Selection")
 
 # --- 1. INPUTS ---
 with st.sidebar:
     st.header("1. Input Data")
-    st.write("Batch load symphonies. The local cache prevents redundant API calls.")
-    urls_text = st.text_area("Paste Composer URLs or IDs (one per line)", height=250)
-    st.caption("💡 *Note: Composer watchlists paginate to 25 items per page. Copy across multiple pages to analyze larger lists.*")
+    st.write("Batch load Composer symphonies, individual stocks, ETFs, or mutual funds.")
+    urls_text = st.text_area("Paste Composer URLs, IDs, or Tickers (one per line)", height=250)
+    st.caption("💡 *Supported: Composer URLs/IDs, Stocks (e.g. GEV, GOOG), ETFs (e.g. QQQ, SPY, ZDIS), and Mutual Funds (e.g. SMPIX, FSELX, RMQHX).*")
     EARLIEST_ALLOWED_DATE = date(1970, 1, 1)
     TODAY = date.today()
     start_date = st.date_input("Start date", value=date(2020, 1, 1), min_value=EARLIEST_ALLOWED_DATE, max_value=TODAY)
     end_date = st.date_input("End date", value=TODAY, min_value=EARLIEST_ALLOWED_DATE, max_value=TODAY)
     
-    load_btn = st.button("Load Symphonies", type="primary")
+    load_btn = st.button("Load Strategies & Tickers", type="primary")
 
     st.divider()
     st.subheader("Data Filters")
     filter_by_date = st.checkbox(
         "Filter by earliest backtest date",
         value=True,
-        help="Exclude symphonies whose backtest history begins after the cutoff date."
+        help="Exclude items whose history begins after the cutoff date."
     )
     if filter_by_date:
         cutoff_date = st.date_input(
@@ -40,11 +40,11 @@ with st.sidebar:
             value=min(start_date + timedelta(days=7), TODAY),
             min_value=EARLIEST_ALLOWED_DATE,
             max_value=TODAY,
-            help="Symphonies starting after this date will be excluded from the dendrogram and downstream analysis."
+            help="Items starting after this date will be excluded from the dendrogram and downstream analysis."
         )
     else:
         cutoff_date = None
-    st.caption("💡 *Tip: Adjusting this filter updates the dendrogram instantly for loaded symphonies without re-fetching.*")
+    st.caption("💡 *Tip: Adjusting this filter updates the dendrogram instantly for loaded items without re-fetching.*")
 
     st.divider()
     st.caption("⚖️ **Disclaimer**: For research and educational purposes only. Not financial or investment advice. Backtested results do not guarantee future returns.")
@@ -55,9 +55,9 @@ if 'symphony_data' not in st.session_state:
 if load_btn and urls_text:
     urls = parse_urls_from_text(urls_text)
     if len(urls) < 2:
-        st.error("Enter a minimum of 2 valid symphonies.")
+        st.error("Enter a minimum of 2 valid symphonies or tickers.")
     else:
-        with st.spinner(f"Processing {len(urls)} symphonies..."):
+        with st.spinner(f"Processing {len(urls)} items..."):
             result = load_symphonies(urls, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
             if isinstance(result, tuple):
                 symphony_data, failed_symphonies = result
@@ -67,12 +67,12 @@ if load_btn and urls_text:
             if len(symphony_data) >= 2:
                 st.session_state.symphony_data = symphony_data
                 if failed_symphonies:
-                    st.warning(f"Loaded {len(symphony_data)} of {len(urls)} symphonies ({len(failed_symphonies)} could not be loaded).")
-                    with st.expander("View Unloaded Symphonies & Error Details"):
+                    st.warning(f"Loaded {len(symphony_data)} of {len(urls)} items ({len(failed_symphonies)} could not be loaded).")
+                    with st.expander("View Unloaded Items & Error Details"):
                         for sym_id, reason in failed_symphonies.items():
                             st.write(f"- `{sym_id}`: {reason}")
                 else:
-                    st.success(f"Successfully loaded all {len(symphony_data)} symphonies.")
+                    st.success(f"Successfully loaded all {len(symphony_data)} items.")
             else:
                 st.error(f"Failed to load sufficient data ({len(symphony_data)} loaded). Minimum 2 required.")
                 if failed_symphonies:
@@ -113,19 +113,19 @@ if st.session_state.symphony_data:
         excluded_symphonies = {}
 
     if excluded_symphonies:
-        st.info(f"⏳ **Date Filter Active:** {len(active_symphonies)} of {len(st.session_state.symphony_data)} symphonies qualify (backtest starts on or before {cutoff_date.strftime('%Y-%m-%d')}). {len(excluded_symphonies)} excluded.")
-        with st.expander(f"View {len(excluded_symphonies)} Excluded Symphonies (Started after cutoff)"):
+        st.info(f"⏳ **Date Filter Active:** {len(active_symphonies)} of {len(st.session_state.symphony_data)} items qualify (history starts on or before {cutoff_date.strftime('%Y-%m-%d')}). {len(excluded_symphonies)} excluded.")
+        with st.expander(f"View {len(excluded_symphonies)} Excluded Items (Started after cutoff)"):
             ex_df = pd.DataFrame([
-                {"Symphony": k, "Composer ID": v["id"], "Earliest Start Date": v["earliest_date"]}
+                {"Strategy / Asset": k, "ID / Ticker": v["id"], "Earliest Start Date": v["earliest_date"]}
                 for k, v in excluded_symphonies.items()
             ])
             st.dataframe(ex_df, hide_index=True, use_container_width=True)
 
     if len(active_symphonies) < 2:
         st.warning(
-            f"⚠️ Only {len(active_symphonies)} symphony qualified with history starting on or before "
+            f"⚠️ Only {len(active_symphonies)} item qualified with history starting on or before "
             f"{cutoff_date.strftime('%Y-%m-%d') if cutoff_date else 'N/A'}. "
-            f"A minimum of 2 symphonies are required to build a dendrogram. "
+            f"A minimum of 2 items are required to build a dendrogram. "
             f"Please adjust or disable the earliest backtest date filter in the sidebar."
         )
         st.stop()
@@ -167,8 +167,8 @@ if st.session_state.symphony_data:
         calmar = annual_ret / abs(max_dd) if max_dd < 0 else np.nan
         
         metrics.append({
-            "Symphony": name,
-            "Composer ID": meta.get('id', 'N/A'),
+            "Strategy / Asset": name,
+            "ID / Ticker": meta.get('id', 'N/A'),
             "Earliest Start Date": pd.to_datetime(meta.get('earliest_date')).strftime('%Y-%m-%d') if meta.get('earliest_date') else 'N/A',
             "Ann. Return": annual_ret,
             "Max Drawdown": max_dd,
@@ -177,7 +177,7 @@ if st.session_state.symphony_data:
             "Calmar Ratio": calmar
         })
         
-    metrics_df = pd.DataFrame(metrics).set_index("Symphony")
+    metrics_df = pd.DataFrame(metrics).set_index("Strategy / Asset")
 
     # Generate Distance Matrix for Clustering (Distance = 1 - Correlation)
     correlation_matrix = np.corrcoef(returns_matrix.T)
@@ -199,7 +199,7 @@ if st.session_state.symphony_data:
         # Assign cluster IDs based on the target number
         cluster_labels = sch.fcluster(linkage_matrix, target_clusters, criterion='maxclust')
         
-        st.metric("Total Algorithms Loaded", len(st.session_state.symphony_data))
+        st.metric("Total Items Loaded", len(st.session_state.symphony_data))
         st.metric("Active in Dendrogram", n_symphonies)
         if excluded_symphonies:
             st.metric("Excluded by Date Filter", len(excluded_symphonies))
@@ -219,14 +219,14 @@ if st.session_state.symphony_data:
         )
         
         ax.set_ylabel("Correlation Distance (1 - r)")
-        ax.set_title("Algorithm Similarity Groupings")
+        ax.set_title("Strategy & Asset Similarity Groupings")
         st.pyplot(fig)
 
     # Combine clusters with metrics
     cluster_df = pd.DataFrame({
-        "Symphony": symphony_names,
+        "Strategy / Asset": symphony_names,
         "Cluster ID": cluster_labels
-    }).set_index("Symphony")
+    }).set_index("Strategy / Asset")
     
     analysis_df = cluster_df.join(metrics_df).reset_index()
 
@@ -258,10 +258,10 @@ if st.session_state.symphony_data:
             elif selection_method == "Lowest Max Drawdown":
                 best_idx = group["Max Drawdown"].idxmax()
             
-            selected_symphonies.append(group.loc[best_idx, "Symphony"])
+            selected_symphonies.append(group.loc[best_idx, "Strategy / Asset"])
             
         st.write("**Automatically Selected Candidates:**")
-        selected_df = analysis_df[analysis_df["Symphony"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
+        selected_df = analysis_df[analysis_df["Strategy / Asset"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
         selected_table_height = min(int((len(selected_df) + 1) * 35.5) + 3, 800)
         st.dataframe(
             selected_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
@@ -283,12 +283,12 @@ if st.session_state.symphony_data:
         cols = st.columns(3)
         for idx, c_id in enumerate(cluster_ids):
             cluster_group = analysis_df[analysis_df["Cluster ID"] == c_id]
-            options = cluster_group["Symphony"].tolist()
+            options = cluster_group["Strategy / Asset"].tolist()
             with cols[idx % 3]:
                 chosen = st.selectbox(f"Cluster {c_id}", options=options, key=f"select_{c_id}")
                 selected_symphonies.append(chosen)
 
-        selected_df = analysis_df[analysis_df["Symphony"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
+        selected_df = analysis_df[analysis_df["Strategy / Asset"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
         selected_table_height = min(int((len(selected_df) + 1) * 35.5) + 3, 800)
         st.dataframe(
             selected_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
@@ -347,12 +347,12 @@ if st.session_state.symphony_data:
     # --- 4. CLUSTER EVALUATION ---
     st.divider()
     st.header("4. Cluster Representatives Evaluation")
-    st.write("Review the algorithms assigned to each branch.")
+    st.write("Review the strategies and assets assigned to each branch.")
     
     c_sort1, c_sort2 = st.columns([2, 1])
     with c_sort1:
         sort_metric = st.selectbox(
-            "Sort algorithms within clusters by:",
+            "Sort items within clusters by:",
             options=["Sharpe Ratio", "Sortino Ratio", "Calmar Ratio", "Ann. Return", "Max Drawdown"],
             index=0
         )

@@ -41,15 +41,37 @@ def parse_urls_from_text(text: str) -> Dict[str, str]:
     lines = text.split('\n')
     found_ids = set()
     
+    clean_lines = []
     for line in lines:
-        line = line.strip()
-        
-        # Skip empty lines and comments
-        if not line or line.startswith('#'):
+        line_clean = line.split('#')[0].strip()
+        if line_clean:
+            clean_lines.append(line_clean)
+
+    tokens = re.split(r'[\s,]+', ' '.join(clean_lines))
+    for token in tokens:
+        token = token.strip()
+        if not token:
             continue
-        
+            
+        lower_token = token.lower()
+        if lower_token.startswith(('ticker:', 'stock:', 'etf:', 'mf:', 'fund:')):
+            sym = token.split(':', 1)[1].strip().upper().lstrip('$')
+            if not sym.startswith('^'):
+                sym = sym.replace('/', '-').replace('.', '-')
+            if sym and sym not in found_ids:
+                found_ids.add(sym)
+                symphony_urls[f"Ticker_{sym}"] = f"ticker:{sym}"
+            continue
+
+        if lower_token.startswith(('symphony:', 'sym:')):
+            sym_id = token.split(':', 1)[1].strip()
+            if sym_id and sym_id not in found_ids:
+                found_ids.add(sym_id)
+                symphony_urls[f"Symphony_{len(symphony_urls) + 1}"] = f"https://app.composer.trade/symphony/{sym_id}/details"
+            continue
+
         # Try to match full or partial URLs first
-        url_match = re.search(url_pattern, line)
+        url_match = re.search(url_pattern, token)
         if url_match:
             symphony_id = url_match.group(1)
             if symphony_id not in found_ids:
@@ -59,16 +81,26 @@ def parse_urls_from_text(text: str) -> Dict[str, str]:
                 symphony_urls[name] = url
                 continue
         
-        # If no URL match, try to match standalone ID
-        id_match = re.search(id_pattern, line)
-        if id_match:
-            symphony_id = id_match.group(1)
-            # Avoid matching things that are clearly not symphony IDs
-            if symphony_id not in found_ids and len(symphony_id) >= 12:
-                found_ids.add(symphony_id)
-                url = f"https://app.composer.trade/symphony/{symphony_id}/details"
+        # If no URL match, try to match standalone Composer ID (12+ characters)
+        if re.match(r'^[A-Za-z0-9_-]{12,}$', token):
+            sym_id = token
+            if sym_id not in found_ids:
+                found_ids.add(sym_id)
+                url = f"https://app.composer.trade/symphony/{sym_id}/details"
                 name = f"Symphony_{len(symphony_urls) + 1}"
                 symphony_urls[name] = url
+                continue
+
+        # Match ticker symbols (1-6 letters, optional classes like BRK-B or BRK.B, or indexes like ^GSPC)
+        clean_token = token.lstrip('$')
+        if re.match(r'^\^?[A-Za-z]{1,6}(?:[\.\-\/][A-Za-z]{1,2})?$', clean_token):
+            sym = clean_token.upper()
+            if not sym.startswith('^'):
+                sym = sym.replace('/', '-').replace('.', '-')
+            if sym and sym not in found_ids:
+                found_ids.add(sym)
+                symphony_urls[f"Ticker_{sym}"] = f"ticker:{sym}"
+                continue
     
     return symphony_urls
 
@@ -359,6 +391,52 @@ def load_multiple_symphonies_from_urls(symphony_urls: Dict[str, str],
         print(f"URL: {url}")
         print(f"{'-'*80}")
         
+        # Check if item is a direct ticker
+        if url.startswith('ticker:'):
+            ticker_sym = url.split('ticker:')[1].upper()
+            try:
+                import yfinance as yf
+                fetch_start = (pd.to_datetime(start_date) - timedelta(days=10)).strftime('%Y-%m-%d')
+                fetch_end = (pd.to_datetime(end_date) + timedelta(days=5)).strftime('%Y-%m-%d')
+                raw = yf.download([ticker_sym], start=fetch_start, end=fetch_end, auto_adjust=True, progress=False)
+                if not raw.empty and 'Close' in raw:
+                    close_df = raw['Close']
+                    if isinstance(close_df, pd.DataFrame):
+                        s = close_df[ticker_sym].dropna() if ticker_sym in close_df else close_df.iloc[:, 0].dropna()
+                    else:
+                        s = close_df.dropna()
+                else:
+                    t_obj = yf.Ticker(ticker_sym)
+                    hist = t_obj.history(start=fetch_start, end=fetch_end, auto_adjust=True)
+                    s = hist['Close'].dropna()
+
+                s.index = pd.to_datetime(s.index).normalize()
+                if s.index.tz is not None:
+                    s.index = s.index.tz_localize(None)
+                returns = s.pct_change().dropna()
+                ret_sliced = returns.loc[start_date:end_date]
+                dates = ret_sliced.index
+
+                symphony_df = pd.DataFrame({
+                    'date': dates,
+                    'returns': ret_sliced.values
+                })
+                symphony_data[ticker_sym] = symphony_df
+                current_holdings[ticker_sym] = {ticker_sym: 1.0}
+                symphony_metadata[ticker_sym] = {
+                    'id': ticker_sym,
+                    'earliest_date': dates[0],
+                    'latest_date': dates[-1],
+                    'total_days': len(dates)
+                }
+                print(f"✓ Successfully loaded {ticker_sym}")
+                print(f"  ID: {ticker_sym}")
+                print(f"  Data: {len(symphony_df)} days from {dates[0].strftime('%Y-%m-%d')} to {dates[-1].strftime('%Y-%m-%d')}")
+                continue
+            except Exception as e:
+                print(f"✗ Error loading {ticker_sym}: {str(e)}")
+                continue
+
         # Extract symphony ID from URL
         import re
         match = re.search(r'/symphony/([a-zA-Z0-9_-]+)', url)
