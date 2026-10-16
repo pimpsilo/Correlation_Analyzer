@@ -36,6 +36,7 @@ Usage:
 
 Commands:
   ui, web             Launch the Streamlit Web Application (default)
+  ab, lowdin          Launch the Löwdin Symmetric Orthogonalization A/B Test App
   cli                 Launch the interactive CLI Correlation Analyzer
   mc, monte-carlo     Launch the Multi-Symphony Monte Carlo Simulator
   help, -h, --help    Show this help message
@@ -66,6 +67,11 @@ case "$MODE" in
         shift 2>/dev/null || true
         echo "📊 Starting CLI Correlation Analyzer (correlation_analyzer.py)..."
         exec "$PYTHON_BIN" correlation_analyzer.py "$@"
+        ;;
+    ab|lowdin|--ab)
+        shift 2>/dev/null || true
+        echo "⚖️ Starting Löwdin A/B Test Streamlit App (app_lowdin_ab_test.py)..."
+        exec "$STREAMLIT_BIN" run app_lowdin_ab_test.py "$@"
         ;;
     mc|monte-carlo|--mc|--monte-carlo)
         shift 2>/dev/null || true

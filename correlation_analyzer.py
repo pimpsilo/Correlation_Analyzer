@@ -16,6 +16,10 @@ from composer_url_loader import (
     parse_urls_from_text,
     load_multiple_symphonies_from_urls
 )
+from lowdin_orthogonalization import (
+    compute_lowdin_matrices,
+    compute_strategy_uniqueness
+)
 
 
 def print_correlation_matrix(correlation_matrix, symphony_names, output_file=None):
@@ -94,6 +98,46 @@ def plot_correlation_heatmap(correlation_matrix, symphony_names, output_file):
     print(f"✓ Correlation heatmap saved to: {output_file}")
     plt.close()
 
+
+
+def print_lowdin_uniqueness(correlation_matrix, symphony_names, output_file=None):
+    """Calculate and print Löwdin Strategy Uniqueness Index ranking."""
+    uniqueness = compute_strategy_uniqueness(correlation_matrix)
+    ranked = sorted(zip(symphony_names, uniqueness), key=lambda x: x[1], reverse=True)
+    
+    output = []
+    output.append("\n" + "="*100)
+    output.append("LÖWDIN STRATEGY UNIQUENESS & AUTONOMY ANALYSIS (diag C^(1/2))")
+    output.append("="*100)
+    output.append("Measures self-overlap in symmetric orthogonal space. High scores = pure alpha / true diversifiers.")
+    output.append(f"{'Rank':<6} {'Strategy Name':<45} {'Uniqueness Score':<18} {'Diversification Tier'}")
+    output.append("-" * 100)
+    
+    for rank, (name, score) in enumerate(ranked, 1):
+        if score >= 0.80:
+            tier = "🟢 High Autonomy (Pure Alpha / True Diversifier)"
+        elif score >= 0.55:
+            tier = "🟡 Moderate Autonomy"
+        else:
+            tier = "🔴 Low Autonomy (High Redundancy / Collinear)"
+        output.append(f"{rank:<6} {name[:43]:<45} {score:>16.3f}   {tier}")
+    
+    output.append("="*100)
+    
+    output_text = "\n".join(output)
+    print(output_text)
+    
+    if output_file:
+        with open(output_file, "a") as f:
+            f.write(output_text + "\n")
+
+
+def export_lowdin_profiles_csv(correlation_matrix, symphony_names, output_file):
+    """Export the symmetric Löwdin square root matrix C^(1/2) as CSV."""
+    c_half, _, _ = compute_lowdin_matrices(correlation_matrix)
+    df = pd.DataFrame(c_half, index=symphony_names, columns=[f"Factor_{i+1}" for i in range(len(symphony_names))])
+    df.to_csv(output_file)
+    print(f"✓ Löwdin orthogonal factor profiles CSV saved to: {output_file}")
 
 def calculate_correlation_stats(correlation_matrix, symphony_names):
     """Calculate and display correlation statistics."""
@@ -253,6 +297,7 @@ def main():
     # Display results
     print_correlation_matrix(correlation_matrix, symphony_names)
     calculate_correlation_stats(correlation_matrix, symphony_names)
+    print_lowdin_uniqueness(correlation_matrix, symphony_names)
     
     # Ask about exports
     print("\n" + "="*100)
@@ -275,6 +320,10 @@ def main():
         # Export heatmap
         heatmap_file = f"{output_dir}/correlation_heatmap.png"
         plot_correlation_heatmap(correlation_matrix, symphony_names, heatmap_file)
+        
+        # Export Löwdin orthogonal profiles
+        lowdin_csv = f"{output_dir}/lowdin_orthogonal_profiles.csv"
+        export_lowdin_profiles_csv(correlation_matrix, symphony_names, lowdin_csv)
         
         print(f"\n✓ All exports saved to: {output_dir}/")
     

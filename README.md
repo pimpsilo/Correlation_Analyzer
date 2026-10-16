@@ -11,12 +11,14 @@ A Streamlit web application for analyzing, clustering, and selecting Composer.tr
    - Direct support for **Stocks** (e.g. `GEV`, `GOOG`), **ETFs** (e.g. `QQQ`, `SPY`, `ZDIS`), and **Mutual Funds** (e.g. `SMPIX`, `FSELX`, `RMQHX`).
    - Built-in local cache in `data_storage/` prevents redundant API calls and rate-limiting.
 
-2. **Hierarchical Clustering**:
-   - Computes return correlation distance ($1 - r$) across synchronized trading days.
-   - Generates interactive dendrograms to discover strategy clusters and eliminate redundant exposure.
+2. **Hierarchical Clustering & Löwdin Orthogonalization**:
+   - **Löwdin Multi-Factor Risk Profile Clustering**: Clusters assets by Euclidean distance between democratic, order-invariant orthogonal risk vectors $\mathbf{C}^{1/2}$.
+   - **Classic Pearson Distance ($1 - r$)**: Retained for standard correlation comparisons.
+   - **Strategy Uniqueness Index**: Computes the diagonal $(C^{1/2})_{ii} \in [0, 1]$ measuring individual asset autonomy and pure alpha vs. shared factor entanglement.
 
 3. **Multi-Objective Candidate Selection**:
    - Filter and pick cluster representatives by:
+     - **Highest Uniqueness (Autonomy)**: Picks the purest diversifier from each cluster
      - **Highest Sharpe Ratio**
      - **Highest Sortino Ratio**
      - **Highest Calmar Ratio**
@@ -44,8 +46,9 @@ pip install -r requirements.txt
 
 # Run with the runner script:
 ./run.sh            # Launches Streamlit Web UI (app.py)
+./run.sh ab         # Launches Löwdin A/B Test comparative suite (app_lowdin_ab_test.py)
 ./run.sh cli        # Launches interactive CLI analyzer (correlation_analyzer.py)
-./run.sh mc         # Launches Monte Carlo simulator
+./run.sh mc         # Launches Monte Carlo simulator (Löwdin or Cholesky)
 
 # Or using the global terminal command:
 correlation-analyzer       # Streamlit Web UI

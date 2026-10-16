@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 from scipy.linalg import cholesky
+from lowdin_orthogonalization import compute_lowdin_matrices, compute_strategy_uniqueness
 from datetime import datetime, timedelta
 import os
 from matplotlib.gridspec import GridSpec
@@ -69,7 +70,7 @@ class PortfolioMonteCarloSimulator:
     Handles correlation modeling, position sizing, and portfolio-level metrics.
     """
     
-    def __init__(self, symphony_data: Dict[str, pd.DataFrame], initial_capital: float = 100000):
+    def __init__(self, symphony_data: Dict[str, pd.DataFrame], initial_capital: float = 100000, correlation_method: str = "lowdin"):
         """
         Initialize the portfolio simulator.
         
@@ -79,6 +80,9 @@ class PortfolioMonteCarloSimulator:
         """
         self.symphony_data = symphony_data
         self.initial_capital = initial_capital
+        self.correlation_method = correlation_method.lower()
+        if self.correlation_method not in ("lowdin", "cholesky"):
+            raise ValueError(f"Unknown correlation_method: {correlation_method}. Must be 'lowdin' or 'cholesky'.")
         self.symphony_names = list(symphony_data.keys())
         self.n_symphonies = len(self.symphony_names)
         
@@ -186,6 +190,17 @@ class PortfolioMonteCarloSimulator:
         self._dual_print("CORRELATION MATRIX")
         self._dual_print("="*80)
         self._print_correlation_matrix()
+
+        # Löwdin Strategy Uniqueness Analysis
+        uniqueness = compute_strategy_uniqueness(self.correlation_matrix)
+        self._dual_print("\n" + "="*80)
+        self._dual_print("LÖWDIN STRATEGY UNIQUENESS / AUTONOMY INDEX (diag C^(1/2))")
+        self._dual_print("="*80)
+        self._dual_print(f"{'Symphony':<40} {'Uniqueness Score':<18} {'Autonomy Tier'}")
+        self._dual_print("-" * 80)
+        for name, score in zip(self.symphony_names, uniqueness):
+            tier = "High (Pure Alpha / Diversifier)" if score >= 0.80 else ("Moderate" if score >= 0.55 else "Low (Redundant / Correlated)")
+            self._dual_print(f"{name:<40} {score:>16.3f}   {tier}")
     
     def _print_correlation_matrix(self):
         """Pretty print the correlation matrix."""
@@ -418,15 +433,17 @@ class PortfolioMonteCarloSimulator:
         means = np.array([self.stats[name]['mean_daily'] for name in self.symphony_names])
         stds = np.array([self.stats[name]['std_daily'] for name in self.symphony_names])
         
-        # Generate correlated random returns using Cholesky decomposition
-        self._dual_print("\nGenerating correlated random returns...")
-        
-        # Cholesky decomposition of correlation matrix
-        try:
-            L = cholesky(self.correlation_matrix, lower=True)
-        except np.linalg.LinAlgError:
-            self._dual_print("Warning: Correlation matrix not positive definite, using nearest positive definite matrix")
-            L = self._nearest_positive_definite_cholesky(self.correlation_matrix)
+        # Generate correlated transformation matrix M
+        if self.correlation_method == "lowdin":
+            self._dual_print("\nGenerating correlated random returns using Löwdin Symmetric Orthogonalization...")
+            M, _, _ = compute_lowdin_matrices(self.correlation_matrix)
+        else:
+            self._dual_print("\nGenerating correlated random returns using Cholesky decomposition...")
+            try:
+                M = cholesky(self.correlation_matrix, lower=True)
+            except np.linalg.LinAlgError:
+                self._dual_print("Warning: Correlation matrix not positive definite, using nearest positive definite matrix")
+                M = self._nearest_positive_definite_cholesky(self.correlation_matrix)
         
         # Initialize arrays to store results
         portfolio_values = np.zeros((n_simulations, n_days_forward + 1))
@@ -444,7 +461,7 @@ class PortfolioMonteCarloSimulator:
             for day in range(n_days_forward):
                 # Generate correlated normal random variables
                 z = np.random.standard_normal(self.n_symphonies)
-                correlated_z = L @ z
+                correlated_z = M @ z
                 
                 # Generate returns for each symphony
                 returns = means + stds * correlated_z
@@ -1001,10 +1018,24 @@ def main():
         dual_print("Please update symphony_files dict with your Composer backtest CSV files.")
         return
     
+    # Choose correlation method
+    corr_method = "lowdin"
+    if "--method" in sys.argv:
+        idx = sys.argv.index("--method")
+        if idx + 1 < len(sys.argv):
+            corr_method = sys.argv[idx + 1].lower()
+    else:
+        dual_print("\nChoose correlation simulation method:")
+        dual_print("1. Löwdin Symmetric Orthogonalization (order-invariant, recommended)")
+        dual_print("2. Classic Cholesky (sequential)")
+        choice = input("Enter choice (1-2, default: 1): ").strip() or "1"
+        corr_method = "lowdin" if choice == "1" else "cholesky"
+
     # Create simulator
     simulator = PortfolioMonteCarloSimulator(
         symphony_data=symphony_data,
-        initial_capital=100000
+        initial_capital=100000,
+        correlation_method=corr_method
     )
     
     # Set portfolio weights

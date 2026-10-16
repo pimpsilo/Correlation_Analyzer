@@ -9,6 +9,11 @@ from datetime import date, timedelta
 
 # Import backend engine functions
 from symphony_engine import parse_urls_from_text, load_symphonies
+from lowdin_orthogonalization import (
+    compute_lowdin_matrices,
+    compute_strategy_uniqueness,
+    compute_lowdin_profile_distance
+)
 
 st.set_page_config(page_title="Symphony & Asset Correlation Clustering", layout="wide")
 st.set_option("client.toolbarMode", "viewer")
@@ -179,24 +184,37 @@ if st.session_state.symphony_data:
         
     metrics_df = pd.DataFrame(metrics).set_index("Strategy / Asset")
 
-    # Generate Distance Matrix for Clustering (Distance = 1 - Correlation)
+    # Calculate Correlation Matrix and Löwdin Uniqueness Scores
     correlation_matrix = np.corrcoef(returns_matrix.T)
-    distance_matrix = np.clip(1 - correlation_matrix, 0, 2)
-    distance_matrix = (distance_matrix + distance_matrix.T) / 2.0
-    np.fill_diagonal(distance_matrix, 0)
-    condensed_dist = ssd.squareform(distance_matrix)
-    
-    # Compute the linkage matrix using Average linkage
-    linkage_matrix = sch.linkage(condensed_dist, method='average')
-    
-    # --- 3. VISUALIZATION ---
+    uniqueness_scores = compute_strategy_uniqueness(correlation_matrix)
+    metrics_df["Uniqueness"] = uniqueness_scores
+
+    # --- 3. VISUALIZATION & CLUSTERING ---
     c1, c2 = st.columns([3, 1])
     
     with c2:
         st.subheader("Cluster Controls")
+        clustering_method = st.radio(
+            "Clustering Metric:",
+            options=["🟢 Löwdin Risk Profile (Symmetric)", "Classic Pearson (1 - r)"],
+            help="Löwdin compares Euclidean distance across full orthogonal factor profiles C^(1/2). Classic Pearson uses 1 - r."
+        )
         target_clusters = st.slider("Number of Target Clusters", min_value=2, max_value=min(100, n_symphonies), value=min(10, n_symphonies))
         
-        # Assign cluster IDs based on the target number
+        if "Löwdin" in clustering_method:
+            condensed_dist = compute_lowdin_profile_distance(correlation_matrix)
+            y_axis_label = "Löwdin Profile Metric Distance"
+            dendro_title = "Strategy & Asset Similarity Groupings (Löwdin Multi-Factor Risk Profiles)"
+        else:
+            distance_matrix = np.clip(1 - correlation_matrix, 0, 2)
+            distance_matrix = (distance_matrix + distance_matrix.T) / 2.0
+            np.fill_diagonal(distance_matrix, 0)
+            condensed_dist = ssd.squareform(distance_matrix)
+            y_axis_label = "Correlation Distance (1 - r)"
+            dendro_title = "Strategy & Asset Similarity Groupings (Classic Pearson 1 - r)"
+
+        # Compute the linkage matrix using Average linkage
+        linkage_matrix = sch.linkage(condensed_dist, method='average')
         cluster_labels = sch.fcluster(linkage_matrix, target_clusters, criterion='maxclust')
         
         st.metric("Total Items Loaded", len(st.session_state.symphony_data))
@@ -218,8 +236,8 @@ if st.session_state.symphony_data:
             color_threshold=linkage_matrix[-(target_clusters-1), 2] if target_clusters > 1 else 0
         )
         
-        ax.set_ylabel("Correlation Distance (1 - r)")
-        ax.set_title("Strategy & Asset Similarity Groupings")
+        ax.set_ylabel(y_axis_label)
+        ax.set_title(dendro_title)
         st.pyplot(fig)
 
     # Combine clusters with metrics
@@ -237,7 +255,7 @@ if st.session_state.symphony_data:
     
     selection_method = st.radio(
         "Selection Criteria:",
-        options=["Highest Sharpe", "Highest Sortino", "Highest Calmar", "Highest Ann. Return", "Lowest Max Drawdown", "Manual Selection"],
+        options=["Highest Uniqueness (Autonomy)", "Highest Sharpe", "Highest Sortino", "Highest Calmar", "Highest Ann. Return", "Lowest Max Drawdown", "Manual Selection"],
         horizontal=True
     )
     
@@ -245,7 +263,9 @@ if st.session_state.symphony_data:
     
     if selection_method != "Manual Selection":
         for cluster_id, group in analysis_df.groupby("Cluster ID"):
-            if selection_method == "Highest Sharpe":
+            if selection_method == "Highest Uniqueness (Autonomy)":
+                best_idx = group["Uniqueness"].idxmax()
+            elif selection_method == "Highest Sharpe":
                 best_idx = group["Sharpe Ratio"].idxmax()
             elif selection_method == "Highest Sortino":
                 valid_sortino = group["Sortino Ratio"].dropna()
@@ -264,8 +284,8 @@ if st.session_state.symphony_data:
         selected_df = analysis_df[analysis_df["Strategy / Asset"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
         selected_table_height = min(int((len(selected_df) + 1) * 35.5) + 3, 800)
         st.dataframe(
-            selected_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
-                           .format({"Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
+            selected_df.style.background_gradient(subset=['Uniqueness', 'Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
+                           .format({"Uniqueness": "{:.3f}", "Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
             hide_index=True,
             use_container_width=True,
             height=selected_table_height
@@ -291,8 +311,8 @@ if st.session_state.symphony_data:
         selected_df = analysis_df[analysis_df["Strategy / Asset"].isin(selected_symphonies)].sort_values(by=["Cluster ID"])
         selected_table_height = min(int((len(selected_df) + 1) * 35.5) + 3, 800)
         st.dataframe(
-            selected_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
-                           .format({"Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
+            selected_df.style.background_gradient(subset=['Uniqueness', 'Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
+                           .format({"Uniqueness": "{:.3f}", "Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
             hide_index=True,
             use_container_width=True,
             height=selected_table_height
@@ -353,7 +373,7 @@ if st.session_state.symphony_data:
     with c_sort1:
         sort_metric = st.selectbox(
             "Sort items within clusters by:",
-            options=["Sharpe Ratio", "Sortino Ratio", "Calmar Ratio", "Ann. Return", "Max Drawdown"],
+            options=["Uniqueness", "Sharpe Ratio", "Sortino Ratio", "Calmar Ratio", "Ann. Return", "Max Drawdown"],
             index=0
         )
     with c_sort2:
@@ -365,8 +385,8 @@ if st.session_state.symphony_data:
         eval_df = analysis_df.sort_values(by=[sort_metric], ascending=[False])
     
     st.dataframe(
-        eval_df.style.background_gradient(subset=['Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
-                       .format({"Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
+        eval_df.style.background_gradient(subset=['Uniqueness', 'Sharpe Ratio', 'Sortino Ratio', 'Calmar Ratio'], cmap='viridis')
+                       .format({"Uniqueness": "{:.3f}", "Ann. Return": "{:.2%}", "Max Drawdown": "{:.2%}", "Sharpe Ratio": "{:.2f}", "Sortino Ratio": "{:.2f}", "Calmar Ratio": "{:.2f}"}),
         hide_index=True,
         use_container_width=True,
         height=600
